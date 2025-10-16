@@ -20,7 +20,8 @@ Userland code execution using the PS5 YouTube app.
 
 ## Important Notes
 
-⚠️ This project is currently in beta and experiences stability issues. It is not recommended for general use at this time.
+This project is currently in beta and experiences stability issues.  
+It is not recommended for general use at this time.  
 
 ## Disclaimer
 
